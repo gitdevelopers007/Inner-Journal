@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Isolated User namespace: only the authenticated owner can read or write their data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      // Top-level interactions subcollection for cross-entry querying
+      match /interactions/{interactionId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      // Journal entries subcollection
+      match /entries/{entryId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+        
+        // Nested interactions subcollection within a journal entry
+        match /interactions/{interactionId} {
+          allow read, write: if request.auth != null && request.auth.uid == userId;
+        }
+      }
+
+      // Explicit recursive path match for all child documents
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}
+
