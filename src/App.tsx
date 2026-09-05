@@ -13,6 +13,8 @@ import {
   UserProfile,
   EntrySummary,
   IdeaEvolutionData,
+  PersonalMemoryItem,
+  MemoryDashboardData,
 } from './types';
 import { Navbar } from './components/Navbar';
 import { LandingView } from './components/LandingView';
@@ -20,6 +22,9 @@ import { Sidebar } from './components/Sidebar';
 import { JournalEditor } from './components/JournalEditor';
 import { SummaryModal } from './components/SummaryModal';
 import { IdeaEvolutionModal } from './components/IdeaEvolutionModal';
+import { MemoryDashboardModal } from './components/MemoryDashboardModal';
+import { AskJournalModal } from './components/AskJournalModal';
+import { memoryService } from './services/memoryService';
 import { Menu, Plus, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 export default function App() {
@@ -36,6 +41,15 @@ export default function App() {
   const [isEvolutionModalOpen, setIsEvolutionModalOpen] = useState(false);
   const [evolutionData, setEvolutionData] = useState<IdeaEvolutionData | null>(null);
   const [isEvolutionLoading, setIsEvolutionLoading] = useState(false);
+
+  // Personal Memory Engine State
+  const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false);
+  const [memories, setMemories] = useState<PersonalMemoryItem[]>([]);
+  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
+  const [memoryDashboardData, setMemoryDashboardData] = useState<MemoryDashboardData | null>(null);
+
+  // Ask My Journal State (Phase 3B)
+  const [isAskJournalOpen, setIsAskJournalOpen] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -57,6 +71,14 @@ export default function App() {
         setEntries([]);
         setSelectedEntryId(null);
         setInteractions([]);
+        setEvolutionData(null);
+        setIsEvolutionModalOpen(false);
+        setActiveSummaryModal(null);
+        setMemories([]);
+        setIsMemoryModalOpen(false);
+        setMemoryDashboardData(null);
+        setIsMemoryLoading(false);
+        setIsAskJournalOpen(false);
       }
       setAuthLoading(false);
     });
@@ -236,6 +258,17 @@ export default function App() {
   // Handler: Sign out
   const handleSignOut = async () => {
     try {
+      setUser(null);
+      setEntries([]);
+      setSelectedEntryId(null);
+      setInteractions([]);
+      setEvolutionData(null);
+      setIsEvolutionModalOpen(false);
+      setActiveSummaryModal(null);
+      setMemories([]);
+      setIsMemoryModalOpen(false);
+      setMemoryDashboardData(null);
+      setIsMemoryLoading(false);
       await logoutUser();
       showToast('Signed out securely');
     } catch (err) {
@@ -261,19 +294,34 @@ export default function App() {
     try {
       // Obtain Firebase Auth ID token from client auth state
       const idToken = await auth.currentUser.getIdToken(true);
+      const currentUid = auth.currentUser.uid;
 
-      // Pass client fallback entries as a defensive fallback for isolated environments
-      const clientFallbackEntries = entries.map((e) => ({
-        id: e.id,
-        userId: e.userId,
-        title: e.title,
-        createdAt: e.createdAt,
-        mood: e.mood,
-        summary: e.summary,
-        recentInteractions: (interactions[e.id] || [])
-          .slice(-4)
-          .map((i) => `${i.role === 'assistant' ? 'Gemini' : 'User'}: ${i.content.slice(0, 300)}`),
-      }));
+      // Pass client fallback entries with correctly resolved interactions for each entry
+      const clientFallbackEntries = await Promise.all(
+        entries.slice(0, 10).map(async (e) => {
+          let entryInteractions: Interaction[] = [];
+          if (e.id === selectedEntryId && interactions.length > 0) {
+            entryInteractions = interactions;
+          } else {
+            try {
+              entryInteractions = await journalService.getEntryInteractions(currentUid, e.id);
+            } catch (fetchErr) {
+              console.warn(`Could not load interactions for entry ${e.id}:`, fetchErr);
+            }
+          }
+          return {
+            id: e.id,
+            userId: currentUid,
+            title: e.title,
+            createdAt: e.createdAt,
+            mood: e.mood,
+            summary: e.summary,
+            recentInteractions: entryInteractions
+              .slice(-6)
+              .map((i) => `${i.role === 'assistant' ? 'Gemini' : 'User'}: ${i.content.slice(0, 300)}`),
+          };
+        })
+      );
 
       const res = await fetch('/api/gemini/idea-evolution', {
         method: 'POST',
@@ -300,6 +348,95 @@ export default function App() {
     } finally {
       setIsEvolutionLoading(false);
     }
+  };
+
+  // Personal Memory Engine Handlers
+  const handleOpenMemory = async () => {
+    if (!auth.currentUser) {
+      showToast('You must be signed in to access Personal Memory', 'error');
+      return;
+    }
+
+    setIsMemoryModalOpen(true);
+
+    // If memories haven't been loaded yet, fetch persisted or synthesize if reflections exist
+    if (memories.length === 0) {
+      setIsMemoryLoading(true);
+      try {
+        const existing = await memoryService.fetchMemories();
+        if (existing.length > 0) {
+          setMemories(existing);
+        } else if (entries.length >= 2) {
+          const result = await memoryService.refreshMemories();
+          setMemories(result.memories);
+          setMemoryDashboardData(result);
+        }
+      } catch (err: any) {
+        console.warn('Memory load note:', err);
+      } finally {
+        setIsMemoryLoading(false);
+      }
+    }
+  };
+
+  const handleRefreshMemories = async () => {
+    if (!auth.currentUser) return;
+    setIsMemoryLoading(true);
+    try {
+      const result = await memoryService.refreshMemories();
+      setMemories(result.memories);
+      setMemoryDashboardData(result);
+      if (result.status === 'insufficient_evidence') {
+        showToast('Needs at least 2 reflections with substantive content', 'error');
+      } else {
+        showToast(`Synthesized ${result.memories.length} personal memory patterns`);
+      }
+    } catch (err: any) {
+      console.error('Error refreshing memories:', err);
+      showToast(err?.message || 'Failed to analyze journal memories', 'error');
+    } finally {
+      setIsMemoryLoading(false);
+    }
+  };
+
+  const handleSaveMemory = async (id: string, isSaved: boolean) => {
+    try {
+      await memoryService.saveMemory(id, isSaved);
+      setMemories((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, isSaved } : m))
+      );
+      showToast(isSaved ? 'Memory pinned to saved' : 'Memory unpinned');
+    } catch (err: any) {
+      console.error('Failed to update memory save state:', err);
+    }
+  };
+
+  const handleDismissMemory = async (id: string) => {
+    try {
+      await memoryService.dismissMemory(id);
+      setMemories((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, isDismissed: true } : m))
+      );
+      showToast('Memory dismissed from active view');
+    } catch (err: any) {
+      console.error('Failed to dismiss memory:', err);
+    }
+  };
+
+  const handleDeleteMemory = async (id: string) => {
+    try {
+      await memoryService.deleteMemory(id);
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+      showToast('Memory removed permanently');
+    } catch (err: any) {
+      console.error('Failed to delete memory:', err);
+    }
+  };
+
+  const handleSelectEntryFromMemory = (entryId: string) => {
+    setIsMemoryModalOpen(false);
+    setIsSidebarOpen(false);
+    setSelectedEntryId(entryId);
   };
 
   const currentEntry = entries.find((e) => e.id === selectedEntryId);
@@ -347,6 +484,8 @@ export default function App() {
         onSignOut={handleSignOut}
         onNewEntry={handleCreateNewEntry}
         onOpenEvolution={() => handleOpenIdeaEvolution()}
+        onOpenMemory={handleOpenMemory}
+        onOpenAskJournal={() => setIsAskJournalOpen(true)}
         entryCount={entries.length}
       />
 
@@ -380,6 +519,8 @@ export default function App() {
             onToggleFavorite={handleToggleFavorite}
             isOpen={isSidebarOpen}
             onClose={() => setIsSidebarOpen(false)}
+            onOpenMemory={handleOpenMemory}
+            onOpenAskJournal={() => setIsAskJournalOpen(true)}
           />
 
           {/* Main Content Area */}
@@ -394,6 +535,9 @@ export default function App() {
                 onAddInteraction={handleAddInteraction}
                 onOpenSummaryModal={(summary) => setActiveSummaryModal(summary)}
                 onOpenEvolution={() => handleOpenIdeaEvolution(currentEntry.id)}
+                onOpenMemory={handleOpenMemory}
+                onOpenAskJournal={() => setIsAskJournalOpen(true)}
+                onSelectEntry={(id) => setSelectedEntryId(id)}
               />
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
@@ -440,6 +584,36 @@ export default function App() {
           setSelectedEntryId(id);
           setIsEvolutionModalOpen(false);
         }}
+      />
+
+      {/* Personal Memory Engine Dashboard Modal */}
+      <MemoryDashboardModal
+        isOpen={isMemoryModalOpen}
+        onClose={() => setIsMemoryModalOpen(false)}
+        memories={memories}
+        isLoading={isMemoryLoading}
+        dashboardData={memoryDashboardData}
+        onRefresh={handleRefreshMemories}
+        onSaveMemory={handleSaveMemory}
+        onDismissMemory={handleDismissMemory}
+        onDeleteMemory={handleDeleteMemory}
+        onSelectEntry={handleSelectEntryFromMemory}
+        totalEntries={entries.length}
+      />
+
+      {/* Ask My Journal Query Intelligence Modal */}
+      <AskJournalModal
+        isOpen={isAskJournalOpen}
+        onClose={() => setIsAskJournalOpen(false)}
+        onSelectEntry={(id) => {
+          setSelectedEntryId(id);
+          setIsAskJournalOpen(false);
+        }}
+        onOpenMemory={(memoryId) => {
+          setIsAskJournalOpen(false);
+          setIsMemoryModalOpen(true);
+        }}
+        totalEntries={entries.length}
       />
     </div>
   );

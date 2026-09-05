@@ -6,8 +6,11 @@ import {
   ReflectionMode,
   MoodType,
   EntrySummary,
+  ContextualMemoryMatch,
 } from '../types';
 import { PromptPicker } from './PromptPicker';
+import { auth } from '../lib/firebase';
+import { memoryService } from '../services/memoryService';
 import {
   Send,
   Sparkles,
@@ -24,7 +27,12 @@ import {
   ChevronDown,
   Wand2,
   BookmarkPlus,
-  GitFork
+  GitFork,
+  Lock,
+  Compass,
+  ArrowRight,
+  X,
+  BookOpen,
 } from 'lucide-react';
 
 interface JournalEditorProps {
@@ -35,6 +43,9 @@ interface JournalEditorProps {
   onAddInteraction: (interaction: Interaction) => Promise<void>;
   onOpenSummaryModal: (summary: EntrySummary) => void;
   onOpenEvolution?: () => void;
+  onOpenMemory?: () => void;
+  onOpenAskJournal?: () => void;
+  onSelectEntry?: (entryId: string) => void;
 }
 
 const MOODS: Array<{ type: MoodType; label: string; emoji: string }> = [
@@ -86,6 +97,9 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
   onAddInteraction,
   onOpenSummaryModal,
   onOpenEvolution,
+  onOpenMemory,
+  onOpenAskJournal,
+  onSelectEntry,
 }) => {
   const [title, setTitle] = useState(entry.title);
   const [mood, setMood] = useState<MoodType>(entry.mood || 'thoughtful');
@@ -98,6 +112,13 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [unsavedAssistantInteraction, setUnsavedAssistantInteraction] = useState<Interaction | null>(null);
+  const [isRetryingSave, setIsRetryingSave] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+
+  // Contextual memory match state
+  const [contextualMatch, setContextualMatch] = useState<ContextualMemoryMatch | null>(null);
+  const [dismissedMatchId, setDismissedMatchId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -108,22 +129,69 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
     setMood(entry.mood || 'thoughtful');
     setErrorMessage(null);
     setLastFailedPrompt(null);
-  }, [entry.id]);
+    setUnsavedAssistantInteraction(null);
+    setIsRetryingSave(false);
+    setSaveStatus('saved');
+    setContextualMatch(null);
+    setDismissedMatchId(null);
+  }, [entry.id, entry.title, entry.mood]);
+
+  // Contextual memory debounced check
+  useEffect(() => {
+    if (!inputText || inputText.trim().length < 35) {
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const match = await memoryService.checkContextualMatch(entry.id, inputText);
+        if (match && match.matchedEntryId !== dismissedMatchId) {
+          setContextualMatch(match);
+        }
+      } catch {
+        // Non-blocking contextual matching failure
+      }
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [inputText, entry.id, dismissedMatchId]);
 
   // Auto scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [interactions, isSending]);
+  }, [interactions, isSending, unsavedAssistantInteraction]);
+
+  const getAuthToken = async (forceRefresh = false): Promise<string | null> => {
+    if (!auth.currentUser) return null;
+    try {
+      return await auth.currentUser.getIdToken(forceRefresh);
+    } catch {
+      return null;
+    }
+  };
 
   const handleTitleBlur = async () => {
     if (title.trim() && title !== entry.title) {
-      await onSaveEntry({ title: title.trim() });
+      try {
+        setSaveStatus('saving');
+        await onSaveEntry({ title: title.trim() });
+        setSaveStatus('saved');
+      } catch (err) {
+        console.error('Error saving title:', err);
+        setSaveStatus('error');
+      }
     }
   };
 
   const handleMoodChange = async (newMood: MoodType) => {
     setMood(newMood);
-    await onSaveEntry({ mood: newMood });
+    try {
+      setSaveStatus('saving');
+      await onSaveEntry({ mood: newMood });
+      setSaveStatus('saved');
+    } catch (err) {
+      console.error('Error saving mood:', err);
+      setSaveStatus('error');
+    }
   };
 
   const handleGenerateTitle = async () => {
@@ -133,15 +201,23 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
 
     try {
       setIsGeneratingTitle(true);
+      const token = await getAuthToken();
+      if (!token) return;
+
       const res = await fetch('/api/gemini/generate-title', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ reflection: sourceText }),
       });
-      const data = await res.json();
-      if (data.title) {
-        setTitle(data.title);
-        await onSaveEntry({ title: data.title });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.title) {
+          setTitle(data.title);
+          await onSaveEntry({ title: data.title });
+        }
       }
     } catch (err) {
       console.error('Error generating title:', err);
@@ -158,6 +234,13 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
     setLastFailedPrompt(null);
     setIsSending(true);
 
+    let token = await getAuthToken();
+    if (!token) {
+      setErrorMessage('You must be signed in to reflect with Gemini.');
+      setIsSending(false);
+      return;
+    }
+
     const userInteractionId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const userInteraction: Interaction = {
       id: userInteractionId,
@@ -168,25 +251,39 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
       mode,
     };
 
+    // Step 1: Immediately persist user interaction to Firestore
     try {
-      // 1. Immediately persist user interaction to Firestore
       await onAddInteraction(userInteraction);
+      // Only clear input text once Firestore persistence has succeeded
       setInputText('');
+    } catch (saveErr: any) {
+      console.error('Failed to save user reflection to Firestore:', saveErr);
+      setErrorMessage('Failed to save your reflection to the cloud. Your text has been preserved.');
+      setLastFailedPrompt(text);
+      setIsSending(false);
+      return;
+    }
 
-      // If this is the first interaction and title is generic, auto-suggest title
-      if (interactions.length === 0 && (!entry.title || entry.title === 'Untitled Reflection')) {
-        handleGenerateTitle();
-      }
+    // Auto-suggest title if first interaction and generic title
+    if (interactions.length === 0 && (!entry.title || entry.title === 'Untitled Reflection')) {
+      handleGenerateTitle();
+    }
 
-      // 2. Call backend Gemini API with multi-turn history
-      const formattedHistory = interactions.map((item) => ({
+    // Step 2: Call backend Gemini API with multi-turn history
+    let assistantText = '';
+    let modelUsed = 'gemini-2.5-flash';
+    try {
+      const formattedHistory = [...interactions, userInteraction].map((item) => ({
         role: item.role,
         content: item.content,
       }));
 
-      const res = await fetch('/api/gemini/converse', {
+      let res = await fetch('/api/gemini/converse', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           prompt: text,
           history: formattedHistory,
@@ -196,6 +293,125 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
         }),
       });
 
+      if (res.status === 401) {
+        const refreshedToken = await getAuthToken(true);
+        if (refreshedToken) {
+          token = refreshedToken;
+          res = await fetch('/api/gemini/converse', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              prompt: text,
+              history: formattedHistory,
+              mode,
+              mood,
+              title,
+            }),
+          });
+        }
+      }
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server responded with ${res.status}`);
+      }
+
+      const data = await res.json();
+      assistantText = data.response;
+      modelUsed = data.modelUsed || 'gemini-2.5-flash';
+    } catch (aiErr: any) {
+      console.error('Error in conversation cycle:', aiErr);
+      setErrorMessage(
+        aiErr.message || 'Gemini reflection could not be generated. Your reflection is saved.'
+      );
+      setLastFailedPrompt(text);
+      setIsSending(false);
+      return;
+    }
+
+    // Step 3: Save assistant interaction to Firestore
+    const assistantInteractionId = `asst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const assistantInteraction: Interaction = {
+      id: assistantInteractionId,
+      entryId: entry.id,
+      role: 'assistant',
+      content: assistantText,
+      timestamp: new Date().toISOString(),
+      mode,
+      modelUsed,
+    };
+
+    try {
+      await onAddInteraction(assistantInteraction);
+      setUnsavedAssistantInteraction(null);
+    } catch (persistErr: any) {
+      console.error('Failed to save assistant response to Firestore:', persistErr);
+      setUnsavedAssistantInteraction(assistantInteraction);
+      setErrorMessage(
+        'Gemini responded, but saving to your cloud journal encountered an issue. The response is preserved below.'
+      );
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleRetryAICall = async (promptText: string) => {
+    if (isSending) return;
+    setIsSending(true);
+    setErrorMessage(null);
+
+    try {
+      let token = await getAuthToken();
+      if (!token) {
+        setErrorMessage('You must be signed in to reflect with Gemini.');
+        setIsSending(false);
+        return;
+      }
+
+      const formattedHistory = interactions.map((item) => ({
+        role: item.role,
+        content: item.content,
+      }));
+
+      let res = await fetch('/api/gemini/converse', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          prompt: promptText,
+          history: formattedHistory,
+          mode,
+          mood,
+          title,
+        }),
+      });
+
+      if (res.status === 401) {
+        const refreshedToken = await getAuthToken(true);
+        if (refreshedToken) {
+          token = refreshedToken;
+          res = await fetch('/api/gemini/converse', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              prompt: promptText,
+              history: formattedHistory,
+              mode,
+              mood,
+              title,
+            }),
+          });
+        }
+      }
+
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || `Server responded with ${res.status}`);
@@ -203,9 +419,8 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
 
       const data = await res.json();
       const assistantText = data.response;
-      const modelUsed = data.modelUsed || 'gemini-3.7-flash';
+      const modelUsed = data.modelUsed || 'gemini-2.5-flash';
 
-      // 3. Save assistant interaction to Firestore
       const assistantInteractionId = `asst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const assistantInteraction: Interaction = {
         id: assistantInteractionId,
@@ -217,15 +432,37 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
         modelUsed,
       };
 
-      await onAddInteraction(assistantInteraction);
+      try {
+        await onAddInteraction(assistantInteraction);
+        setLastFailedPrompt(null);
+      } catch (persistErr) {
+        console.error('Failed to save retried assistant response to Firestore:', persistErr);
+        setUnsavedAssistantInteraction(assistantInteraction);
+        setErrorMessage(
+          'Gemini responded, but saving to your journal encountered an error. The response is preserved below.'
+        );
+      }
     } catch (err: any) {
-      console.error('Error in conversation cycle:', err);
-      setErrorMessage(
-        err.message || 'Failed to communicate with Gemini. Your reflection was saved.'
-      );
-      setLastFailedPrompt(text);
+      console.error('Error during AI retry:', err);
+      setErrorMessage(err.message || 'Retry failed. Please check connection and try again.');
+      setLastFailedPrompt(promptText);
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleRetrySaveAssistant = async () => {
+    if (!unsavedAssistantInteraction || isRetryingSave) return;
+    try {
+      setIsRetryingSave(true);
+      await onAddInteraction(unsavedAssistantInteraction);
+      setUnsavedAssistantInteraction(null);
+      setErrorMessage(null);
+    } catch (err: any) {
+      console.error('Error retrying save of assistant interaction:', err);
+      setErrorMessage('Failed to save to cloud on retry. Please check connection and try again.');
+    } finally {
+      setIsRetryingSave(false);
     }
   };
 
@@ -236,9 +473,18 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
       setIsSummarizing(true);
       setErrorMessage(null);
 
-      const res = await fetch('/api/gemini/summarize', {
+      let token = await getAuthToken();
+      if (!token) {
+        setErrorMessage('You must be signed in to generate reflection summaries.');
+        return;
+      }
+
+      let res = await fetch('/api/gemini/summarize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           title,
           mood,
@@ -248,6 +494,28 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
           })),
         }),
       });
+
+      if (res.status === 401) {
+        const refreshedToken = await getAuthToken(true);
+        if (refreshedToken) {
+          token = refreshedToken;
+          res = await fetch('/api/gemini/summarize', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              title,
+              mood,
+              interactions: interactions.map((i) => ({
+                role: i.role,
+                content: i.content,
+              })),
+            }),
+          });
+        }
+      }
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
@@ -285,7 +553,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
       {/* Top Workspace Toolbar */}
       <div className="bg-white border-b border-neutral-200/90 p-4 sm:px-6 space-y-3 shrink-0">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          {/* Title input with auto-generate button */}
+          {/* Title input with auto-generate button and save status */}
           <div className="flex-1 flex items-center gap-2 max-w-xl">
             <input
               id="entry-title-input"
@@ -293,6 +561,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onBlur={handleTitleBlur}
+              aria-label="Journal entry title"
               placeholder="Give your reflection a title..."
               className="w-full text-lg sm:text-xl font-serif font-bold text-neutral-900 bg-transparent border-b border-transparent hover:border-neutral-200 focus:border-neutral-900 focus:outline-hidden px-1 py-0.5 transition-colors"
             />
@@ -300,6 +569,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
               id="auto-title-btn"
               onClick={handleGenerateTitle}
               disabled={isGeneratingTitle}
+              aria-label="Auto-suggest title from your reflection"
               title="Auto-suggest title from your reflection"
               className="p-1.5 text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50"
             >
@@ -307,11 +577,53 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
                 className={`w-4 h-4 ${isGeneratingTitle ? 'animate-spin text-amber-600' : ''}`}
               />
             </button>
+            <div className="hidden sm:flex items-center text-xs text-neutral-400 shrink-0 pl-1">
+              {saveStatus === 'saving' ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-neutral-400 font-medium animate-pulse">
+                  <RefreshCw className="w-3 h-3 animate-spin text-neutral-400" />
+                  Saving...
+                </span>
+              ) : saveStatus === 'saved' ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-neutral-400 font-medium">
+                  <Check className="w-3 h-3 text-emerald-600" />
+                  Saved
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-medium">
+                  <AlertCircle className="w-3 h-3" />
+                  Unsaved
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Action Toolbar */}
           <div className="flex items-center gap-2 shrink-0">
+            {onOpenAskJournal && (
+              <button
+                id="entry-ask-journal-btn"
+                onClick={onOpenAskJournal}
+                title="Query your reflections with Ask My Journal"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 border border-neutral-300/80 rounded-lg shadow-2xs transition-all cursor-pointer"
+              >
+                <BookOpen className="w-3.5 h-3.5 text-neutral-700" />
+                <span className="hidden md:inline">Ask Journal</span>
+              </button>
+            )}
+
             {/* Idea Evolution CTA */}
+            {onOpenMemory && (
+              <button
+                id="entry-memory-engine-btn"
+                onClick={onOpenMemory}
+                title="Explore recurring themes, goals, and lessons in Personal Memory"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200/80 border border-neutral-200 rounded-lg shadow-2xs transition-all cursor-pointer"
+              >
+                <Compass className="w-3.5 h-3.5 text-neutral-600" />
+                <span className="hidden sm:inline">Personal Memory</span>
+              </button>
+            )}
+
             {onOpenEvolution && (
               <button
                 id="entry-idea-evolution-btn"
@@ -416,10 +728,19 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
             </div>
             {lastFailedPrompt && (
               <button
-                onClick={() => handleSendMessage(lastFailedPrompt)}
+                onClick={() => {
+                  const alreadySavedUser = interactions.some(
+                    (i) => i.role === 'user' && i.content === lastFailedPrompt
+                  );
+                  if (alreadySavedUser) {
+                    handleRetryAICall(lastFailedPrompt);
+                  } else {
+                    handleSendMessage(lastFailedPrompt);
+                  }
+                }}
                 className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-md font-medium text-[11px] shrink-0 cursor-pointer"
               >
-                Retry AI Call
+                Retry Reflection
               </button>
             )}
           </div>
@@ -528,6 +849,40 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
               );
             })}
 
+            {/* Unsaved assistant interaction banner & card with Retry Save */}
+            {unsavedAssistantInteraction && (
+              <div className="flex flex-col items-start max-w-3xl mx-auto w-full animate-in fade-in">
+                <div className="w-full bg-amber-50 border border-amber-300/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between gap-3 text-xs text-amber-900 border-b border-amber-200/60 pb-2">
+                    <span className="font-semibold flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      Gemini Response (Preserved — Unsaved to Cloud)
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleCopyText('unsaved_asst', unsavedAssistantInteraction.content)}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs text-amber-800 hover:bg-amber-100 rounded-md cursor-pointer transition-colors"
+                      >
+                        {copiedId === 'unsaved_asst' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                        <span>Copy</span>
+                      </button>
+                      <button
+                        onClick={handleRetrySaveAssistant}
+                        disabled={isRetryingSave}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white rounded-md font-semibold text-xs cursor-pointer transition-all shadow-2xs"
+                      >
+                        {isRetryingSave ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                        <span>{isRetryingSave ? 'Saving...' : 'Retry Save'}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="text-xs sm:text-sm text-neutral-800 leading-relaxed markdown-body">
+                    <ReactMarkdown>{unsavedAssistantInteraction.content}</ReactMarkdown>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Typing / Generating state indicator */}
             {isSending && (
               <div className="flex flex-col items-start max-w-3xl mx-auto">
@@ -536,7 +891,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
                     <Sparkles className="w-3.5 h-3.5 animate-spin" />
                   </div>
                   <span className="text-xs text-neutral-600 font-medium">
-                    Gemini 3.6 Flash is reflecting...
+                    Gemini is reflecting...
                   </span>
                 </div>
               </div>
@@ -550,6 +905,71 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
       {/* Input Composer Footer */}
       <div className="p-4 sm:p-6 bg-white border-t border-neutral-200/90 shrink-0">
         <div className="max-w-3xl mx-auto space-y-3">
+          {/* Contextual Memory "You said this before" banner */}
+          {contextualMatch && dismissedMatchId !== contextualMatch.matchedEntryId && (
+            <div
+              id="contextual-memory-banner"
+              className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-3 shadow-2xs space-y-2 animate-in fade-in slide-in-from-bottom-2"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-md bg-amber-200/70 text-amber-800 flex items-center justify-center shrink-0">
+                    <Sparkles className="w-3 h-3" />
+                  </div>
+                  <span className="text-xs font-semibold text-neutral-900">
+                    You reflected on something similar before
+                  </span>
+                </div>
+                <button
+                  id="dismiss-contextual-memory-btn"
+                  onClick={() => setDismissedMatchId(contextualMatch.matchedEntryId)}
+                  className="p-1 text-neutral-400 hover:text-neutral-700 rounded-md cursor-pointer"
+                  title="Dismiss connection"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="text-xs text-neutral-700 pl-7 space-y-1">
+                <p className="font-semibold text-neutral-800">
+                  In &ldquo;{contextualMatch.matchedEntryTitle}&rdquo; ({new Date(contextualMatch.matchedEntryDate).toLocaleDateString()}):
+                </p>
+                {contextualMatch.snippet && (
+                  <p className="italic text-neutral-600 bg-white/80 p-1.5 rounded-md border border-amber-200/60 text-[11px]">
+                    &ldquo;{contextualMatch.snippet}&rdquo;
+                  </p>
+                )}
+                <p className="text-neutral-600 leading-relaxed text-[11px]">
+                  {contextualMatch.connectionReason}
+                </p>
+                {contextualMatch.promptQuestion && (
+                  <p className="text-amber-900 font-medium text-[11px] pt-0.5">
+                    &bull; {contextualMatch.promptQuestion}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pl-7 pt-1">
+                {onSelectEntry && (
+                  <button
+                    id="open-contextual-entry-btn"
+                    onClick={() => onSelectEntry(contextualMatch.matchedEntryId)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-neutral-900 bg-white hover:bg-neutral-100 border border-neutral-300 rounded-md shadow-2xs transition-colors cursor-pointer"
+                  >
+                    <span>Open Past Reflection</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                )}
+                <button
+                  onClick={() => setDismissedMatchId(contextualMatch.matchedEntryId)}
+                  className="px-2 py-1 text-xs text-neutral-500 hover:text-neutral-800 cursor-pointer"
+                >
+                  Keep Writing
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Prompt Toggle Bar */}
           <div className="flex items-center justify-between text-xs">
             <button
@@ -585,6 +1005,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
+              aria-label="Reflection message input"
               placeholder={`Write your reflection, journal entry, or ask for ${mode}...`}
               rows={3}
               className="w-full text-xs sm:text-sm bg-transparent border-0 focus:outline-hidden text-neutral-900 placeholder:text-neutral-400 resize-none p-1.5 leading-relaxed"
@@ -594,6 +1015,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
               id="send-reflection-btn"
               onClick={() => handleSendMessage()}
               disabled={!inputText.trim() || isSending}
+              aria-label="Send reflection to Gemini"
               className="inline-flex items-center justify-center w-10 h-10 bg-neutral-900 hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-neutral-900 text-white rounded-lg transition-all active:scale-95 cursor-pointer shrink-0"
               title="Send Reflection"
             >
@@ -603,6 +1025,17 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
                 <Send className="w-4 h-4" />
               )}
             </button>
+          </div>
+
+          {/* Privacy & Trust Assurance */}
+          <div className="flex items-center justify-between text-[11px] text-neutral-400 px-1">
+            <span className="flex items-center gap-1.5">
+              <Lock className="w-3 h-3 text-neutral-400" />
+              Private reflection &bull; Strictly isolated to your authenticated Google account
+            </span>
+            <span className="hidden sm:inline">
+              ⌘/Ctrl + Enter to send
+            </span>
           </div>
         </div>
       </div>

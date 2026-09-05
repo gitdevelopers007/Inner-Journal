@@ -47,6 +47,31 @@
         "modelUsed": { "type": "string" }
       },
       "required": ["id", "entryId", "role", "content", "timestamp"]
+    },
+    "PersonalMemory": {
+      "title": "PersonalMemory",
+      "description": "A personal memory item, theme, goal, lesson, moment, open loop, or thinking shift grounded in user entries",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["theme", "goal", "lesson", "moment", "open_loop", "thinking_shift"] },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "evidence": { "type": "array" },
+        "status": { "type": "string" },
+        "firstObservedDate": { "type": "string" },
+        "mostRecentDate": { "type": "string" },
+        "occurrenceCount": { "type": "number" },
+        "possibleInterpretation": { "type": "string" },
+        "earlierPerspective": { "type": "string" },
+        "laterPerspective": { "type": "string" },
+        "isSaved": { "type": "boolean" },
+        "isDismissed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "type", "title", "description", "evidence"]
     }
   },
   "firestore": {
@@ -65,6 +90,10 @@
     "/users/{userId}/interactions/{interactionId}": {
       "schema": "Interaction",
       "description": "Flat index of all user interactions for global history querying"
+    },
+    "/users/{userId}/memories/{memoryId}": {
+      "schema": "PersonalMemory",
+      "description": "Private personal memories and recurring patterns grounded in user reflections"
     }
   }
 }

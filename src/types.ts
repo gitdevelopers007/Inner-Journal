@@ -110,3 +110,115 @@ export interface IdeaEvolutionResponse {
   modelUsed: string;
   error?: string;
 }
+
+// ==========================================
+// Personal Memory Engine Types (Phase 3A)
+// ==========================================
+
+export type MemoryType =
+  | 'theme'
+  | 'goal'
+  | 'lesson'
+  | 'moment'
+  | 'open_loop'
+  | 'thinking_shift';
+
+export interface MemoryEvidence {
+  entryId: string;
+  entryTitle?: string;
+  date: string;
+  reason: string;
+}
+
+export interface PersonalMemoryItem {
+  id: string;
+  userId: string;
+  type: MemoryType;
+  title: string;
+  description: string;
+  evidence: MemoryEvidence[];
+  status?: 'active' | 'completed' | 'paused' | 'unclear'; // for goals
+  firstObservedDate?: string;
+  mostRecentDate?: string;
+  occurrenceCount?: number;
+  possibleInterpretation?: string;
+  earlierPerspective?: string; // for thinking_shift
+  laterPerspective?: string; // for thinking_shift
+  isSaved?: boolean;
+  isDismissed?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContextualMemoryMatch {
+  matchedEntryId: string;
+  matchedEntryTitle: string;
+  matchedEntryDate: string;
+  snippet: string;
+  connectionReason: string;
+  promptQuestion?: string;
+}
+
+export interface MemoryDashboardData {
+  memories: PersonalMemoryItem[];
+  totalAnalyzedEntries: number;
+  lastAnalyzedAt: string | null;
+  status: 'success' | 'insufficient_evidence';
+  message?: string;
+}
+
+// ==========================================
+// Ask My Journal Types (Phase 3B)
+// ==========================================
+
+export interface AskJournalEvidence {
+  entryId: string;
+  entryTitle: string;
+  date: string;
+  snippet: string;
+  reason: string;
+}
+
+export interface AskJournalRelatedMemory {
+  id: string;
+  type: MemoryType;
+  title: string;
+  description?: string;
+}
+
+export type QueryCategory =
+  | 'recall'
+  | 'pattern'
+  | 'goal'
+  | 'lesson'
+  | 'decision'
+  | 'change'
+  | 'history'
+  | 'related'
+  | 'open_loop'
+  | 'achievement'
+  | 'comparison'
+  | 'general'
+  | 'conversational';
+
+export interface AskJournalResponse {
+  answer: string;
+  evidence: AskJournalEvidence[];
+  relatedMemories: AskJournalRelatedMemory[];
+  confidence: 'high' | 'medium' | 'low';
+  insufficientEvidence: boolean;
+  whyExplanation?: string;
+  suggestedFollowUps?: string[];
+  queryCategory?: QueryCategory;
+  modelUsed?: string;
+}
+
+export interface AskJournalMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  response?: AskJournalResponse;
+  timestamp: string;
+  error?: string;
+}
+

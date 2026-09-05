@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   IdeaEvolutionData,
   IdeaEvolutionStage,
@@ -35,11 +35,23 @@ export const IdeaEvolutionModal: React.FC<IdeaEvolutionModalProps> = ({
   isLoading,
   onSelectEntry,
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
     <div
       id="idea-evolution-modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="idea-evolution-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-neutral-900/60 backdrop-blur-xs animate-in fade-in duration-200"
       onClick={onClose}
     >
@@ -56,7 +68,7 @@ export const IdeaEvolutionModal: React.FC<IdeaEvolutionModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-serif font-bold text-neutral-900 tracking-tight">
+                <h2 id="idea-evolution-title" className="text-base font-serif font-bold text-neutral-900 tracking-tight">
                   Idea Evolution Map
                 </h2>
                 <span className="px-2 py-0.5 text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200/70 rounded-full flex items-center gap-1">
@@ -73,6 +85,7 @@ export const IdeaEvolutionModal: React.FC<IdeaEvolutionModalProps> = ({
           <button
             id="close-evolution-modal-btn"
             onClick={onClose}
+            aria-label="Close Idea Evolution dialog"
             className="p-2 text-neutral-400 hover:text-neutral-700 hover:bg-neutral-200/60 rounded-lg transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />

@@ -11,7 +11,8 @@ import {
   BookOpen,
   X,
   Filter,
-  Check
+  Check,
+  Compass
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -23,6 +24,8 @@ interface SidebarProps {
   onToggleFavorite: (id: string) => void;
   isOpen: boolean;
   onClose: () => void;
+  onOpenMemory?: () => void;
+  onOpenAskJournal?: () => void;
 }
 
 const MOOD_EMOJIS: Record<MoodType, string> = {
@@ -52,6 +55,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleFavorite,
   isOpen,
   onClose,
+  onOpenMemory,
+  onOpenAskJournal,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedMood, setSelectedMood] = useState<MoodType | 'all'>('all');
@@ -72,6 +77,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return matchesSearch && matchesMood && matchesFavorite;
     });
   }, [entries, searchTerm, selectedMood, showFavoritesOnly]);
+
+  const groupedEntries = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const lastWeek = new Date(today);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+
+    const groups: { [key: string]: JournalEntry[] } = {
+      Today: [],
+      Yesterday: [],
+      'Previous 7 Days': [],
+      Earlier: [],
+    };
+
+    filteredEntries.forEach((entry) => {
+      const dateVal = new Date(entry.updatedAt || entry.createdAt);
+      dateVal.setHours(0, 0, 0, 0);
+
+      if (dateVal.getTime() === today.getTime()) {
+        groups.Today.push(entry);
+      } else if (dateVal.getTime() === yesterday.getTime()) {
+        groups.Yesterday.push(entry);
+      } else if (dateVal.getTime() > lastWeek.getTime()) {
+        groups['Previous 7 Days'].push(entry);
+      } else {
+        groups.Earlier.push(entry);
+      }
+    });
+
+    return Object.entries(groups).filter(([_, items]) => items.length > 0);
+  }, [filteredEntries]);
 
   const formatDate = (isoString: string) => {
     try {
@@ -193,10 +233,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )
             )}
           </div>
+
+          {onOpenAskJournal && (
+            <button
+              id="sidebar-ask-journal-btn"
+              onClick={onOpenAskJournal}
+              className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-neutral-900 bg-amber-50/70 hover:bg-amber-100/80 border border-amber-200/80 rounded-lg transition-all cursor-pointer group"
+            >
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-3.5 h-3.5 text-amber-800" />
+                <span>Ask My Journal</span>
+              </div>
+              <span className="text-[10px] text-amber-700 font-medium">Query</span>
+            </button>
+          )}
+
+          {onOpenMemory && (
+            <button
+              id="sidebar-memory-engine-btn"
+              onClick={onOpenMemory}
+              className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-neutral-800 bg-neutral-50 hover:bg-neutral-100/90 border border-neutral-200/80 rounded-lg transition-all cursor-pointer group"
+            >
+              <div className="flex items-center gap-2">
+                <Compass className="w-3.5 h-3.5 text-neutral-600 group-hover:text-neutral-900 transition-colors" />
+                <span>Personal Memory Engine</span>
+              </div>
+              <span className="text-[10px] text-neutral-400 group-hover:text-neutral-600">Explore</span>
+            </button>
+          )}
         </div>
 
-        {/* Entries List */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {/* Entries List with Progressive Date Disclosure */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-4">
           {filteredEntries.length === 0 ? (
             <div className="text-center py-10 px-4 space-y-3">
               <div className="w-10 h-10 rounded-full bg-neutral-100 text-neutral-400 flex items-center justify-center mx-auto">
@@ -215,6 +283,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {!searchTerm && selectedMood === 'all' && !showFavoritesOnly && (
                 <button
                   onClick={onNewEntry}
+                  aria-label="Begin your first reflection entry"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -223,144 +292,156 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
           ) : (
-            filteredEntries.map((entry) => {
-              const isSelected = entry.id === selectedEntryId;
-              const isDeleting = confirmDeleteId === entry.id;
+            groupedEntries.map(([groupTitle, groupItems]) => (
+              <div key={groupTitle} className="space-y-2">
+                <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider px-1 pt-1">
+                  {groupTitle}
+                </div>
 
-              return (
-                <div
-                  key={entry.id}
-                  id={`entry-card-${entry.id}`}
-                  onClick={() => {
-                    if (!isDeleting) onSelectEntry(entry.id);
-                  }}
-                  className={`group relative p-3 rounded-xl border transition-all cursor-pointer ${
-                    isSelected
-                      ? 'bg-neutral-900 text-white border-neutral-900 shadow-sm'
-                      : 'bg-white hover:bg-neutral-50 text-neutral-800 border-neutral-200/80 hover:border-neutral-300'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-sm shrink-0">{MOOD_EMOJIS[entry.mood] || '💡'}</span>
-                      <h3
-                        className={`text-xs font-semibold truncate ${
-                          isSelected ? 'text-white' : 'text-neutral-900'
-                        }`}
-                      >
-                        {entry.title || 'Untitled Reflection'}
-                      </h3>
-                    </div>
+                {groupItems.map((entry) => {
+                  const isSelected = entry.id === selectedEntryId;
+                  const isDeleting = confirmDeleteId === entry.id;
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleFavorite(entry.id);
-                        }}
-                        title={entry.isFavorite ? 'Remove Star' : 'Star Reflection'}
-                        className={`p-1 rounded-md transition-colors cursor-pointer ${
-                          isSelected
-                            ? 'text-neutral-300 hover:text-white'
-                            : 'text-neutral-400 hover:text-neutral-700'
-                        }`}
-                      >
-                        <Star
-                          className={`w-3.5 h-3.5 ${
-                            entry.isFavorite
-                              ? 'fill-amber-400 text-amber-400'
-                              : ''
-                          }`}
-                        />
-                      </button>
-
-                      {isDeleting ? (
-                        <div
-                          className="flex items-center gap-1 bg-rose-600 text-white px-2 py-0.5 rounded-md text-[10px]"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <span>Delete?</span>
-                          <button
-                            onClick={() => {
-                              onDeleteEntry(entry.id);
-                              setConfirmDeleteId(null);
-                            }}
-                            className="hover:underline font-bold ml-1"
-                          >
-                            Yes
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="hover:underline opacity-80 ml-1"
-                          >
-                            No
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setConfirmDeleteId(entry.id);
-                          }}
-                          title="Delete entry"
-                          className={`p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer ${
-                            isSelected
-                              ? 'text-neutral-400 hover:text-rose-300'
-                              : 'text-neutral-400 hover:text-rose-600'
-                          }`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Summary preview or snippet */}
-                  <p
-                    className={`text-[11px] mt-1.5 line-clamp-2 leading-relaxed ${
-                      isSelected ? 'text-neutral-300' : 'text-neutral-500'
-                    }`}
-                  >
-                    {entry.summary?.overview || 'Conversational reflection with Gemini 3.6 Flash.'}
-                  </p>
-
-                  {/* Meta row */}
-                  <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-current/10 text-[10px]">
-                    <span
-                      className={`flex items-center gap-1 ${
-                        isSelected ? 'text-neutral-400' : 'text-neutral-400'
+                  return (
+                    <div
+                      key={entry.id}
+                      id={`entry-card-${entry.id}`}
+                      onClick={() => {
+                        if (!isDeleting) onSelectEntry(entry.id);
+                      }}
+                      className={`group relative p-3 rounded-xl border transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-neutral-900 text-white border-neutral-900 shadow-sm'
+                          : 'bg-white hover:bg-neutral-50 text-neutral-800 border-neutral-200/80 hover:border-neutral-300'
                       }`}
                     >
-                      <Calendar className="w-3 h-3" />
-                      {formatDate(entry.updatedAt || entry.createdAt)}
-                    </span>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm shrink-0">{MOOD_EMOJIS[entry.mood] || '💡'}</span>
+                          <h3
+                            className={`text-xs font-semibold truncate ${
+                              isSelected ? 'text-white' : 'text-neutral-900'
+                            }`}
+                          >
+                            {entry.title || 'Untitled Reflection'}
+                          </h3>
+                        </div>
 
-                    {entry.summary ? (
-                      <span
-                        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full font-medium ${
-                          isSelected
-                            ? 'bg-neutral-800 text-amber-300'
-                            : 'bg-amber-50 text-amber-800 border border-amber-200/60'
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleFavorite(entry.id);
+                            }}
+                            aria-label={entry.isFavorite ? 'Remove star' : 'Star reflection'}
+                            title={entry.isFavorite ? 'Remove Star' : 'Star Reflection'}
+                            className={`p-1 rounded-md transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'text-neutral-300 hover:text-white'
+                                : 'text-neutral-400 hover:text-neutral-700'
+                            }`}
+                          >
+                            <Star
+                              className={`w-3.5 h-3.5 ${
+                                entry.isFavorite
+                                  ? 'fill-amber-400 text-amber-400'
+                                  : ''
+                              }`}
+                            />
+                          </button>
+
+                          {isDeleting ? (
+                            <div
+                              className="flex items-center gap-1 bg-rose-600 text-white px-2 py-0.5 rounded-md text-[10px]"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span>Delete?</span>
+                              <button
+                                onClick={() => {
+                                  onDeleteEntry(entry.id);
+                                  setConfirmDeleteId(null);
+                                }}
+                                aria-label="Confirm delete reflection"
+                                className="hover:underline font-bold ml-1"
+                              >
+                                Yes
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(null)}
+                                aria-label="Cancel delete reflection"
+                                className="hover:underline opacity-80 ml-1"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(entry.id);
+                              }}
+                              aria-label="Delete reflection"
+                              title="Delete entry"
+                              className={`p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer ${
+                                isSelected
+                                  ? 'text-neutral-400 hover:text-rose-300'
+                                  : 'text-neutral-400 hover:text-rose-600'
+                              }`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Summary preview or snippet */}
+                      <p
+                        className={`text-[11px] mt-1.5 line-clamp-2 leading-relaxed ${
+                          isSelected ? 'text-neutral-300' : 'text-neutral-500'
                         }`}
                       >
-                        <Sparkles className="w-2.5 h-2.5" />
-                        Summarized
-                      </span>
-                    ) : (
-                      <span
-                        className={`font-medium ${
-                          isSelected ? 'text-neutral-400' : 'text-neutral-400'
-                        }`}
-                      >
-                        {entry.interactionCount > 0
-                          ? `${entry.interactionCount} messages`
-                          : 'Draft'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })
+                        {entry.summary?.overview || 'Conversational reflection with Gemini.'}
+                      </p>
+
+                      {/* Meta row */}
+                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-current/10 text-[10px]">
+                        <span
+                          className={`flex items-center gap-1 ${
+                            isSelected ? 'text-neutral-400' : 'text-neutral-400'
+                          }`}
+                        >
+                          <Calendar className="w-3 h-3" />
+                          {formatDate(entry.updatedAt || entry.createdAt)}
+                        </span>
+
+                        {entry.summary ? (
+                          <span
+                            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full font-medium ${
+                              isSelected
+                                ? 'bg-neutral-800 text-amber-300'
+                                : 'bg-amber-50 text-amber-800 border border-amber-200/60'
+                            }`}
+                          >
+                            <Sparkles className="w-2.5 h-2.5" />
+                            Summarized
+                          </span>
+                        ) : (
+                          <span
+                            className={`font-medium ${
+                              isSelected ? 'text-neutral-400' : 'text-neutral-400'
+                            }`}
+                          >
+                            {entry.interactionCount > 0
+                              ? `${entry.interactionCount} messages`
+                              : 'Draft'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))
           )}
         </div>
       </aside>

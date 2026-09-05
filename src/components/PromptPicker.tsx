@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MoodType } from '../types';
 import { Sparkles, RefreshCw, Lightbulb } from 'lucide-react';
+import { auth } from '../lib/firebase';
 
 interface PromptPickerProps {
   mood: MoodType;
@@ -61,9 +62,16 @@ export const PromptPicker: React.FC<PromptPickerProps> = ({
   const handleFetchAIPrompts = async () => {
     try {
       setLoading(true);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (auth.currentUser) {
+        const token = await auth.currentUser.getIdToken();
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+      }
       const res = await fetch('/api/gemini/suggest-prompts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ mood }),
       });
       const data = await res.json();

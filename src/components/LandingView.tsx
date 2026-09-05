@@ -45,7 +45,7 @@ export const LandingView: React.FC<LandingViewProps> = ({ onAuthenticated }) => 
             Your Private Space for Meaningful Reflections & Clarity
           </h1>
           <p className="text-base sm:text-lg text-neutral-600 max-w-2xl mx-auto leading-relaxed">
-            Converse with Gemini 3.6 Flash to unpack your thoughts, brainstorm ideas, and capture daily summaries—secured with Google Authentication and protected by per-user Firestore security rules.
+            Converse with Gemini to unpack your thoughts, explore how your ideas evolve over time, and capture daily summaries—secured with Google Authentication and protected by per-user Firestore security rules.
           </p>
         </div>
 

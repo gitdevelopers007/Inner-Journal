@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { EntrySummary } from '../types';
 import { Sparkles, X, Check, Copy, Heart, Tag, ArrowUpRight, Compass } from 'lucide-react';
 
@@ -16,6 +16,15 @@ export const SummaryModal: React.FC<SummaryModalProps> = ({
   onClose,
 }) => {
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen || !summary) return null;
 
@@ -38,8 +47,17 @@ ${summary.actionableInsights.map((i) => `- ${i}`).join('\n')}`;
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-neutral-200 overflow-hidden flex flex-col max-h-[90vh]">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="summary-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-900/50 backdrop-blur-xs animate-in fade-in duration-150"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-neutral-200 overflow-hidden flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-neutral-200 flex items-center justify-between bg-neutral-50/50">
           <div className="flex items-center gap-2">
@@ -47,7 +65,7 @@ ${summary.actionableInsights.map((i) => `- ${i}`).join('\n')}`;
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-neutral-900 leading-tight">
+              <h2 id="summary-modal-title" className="text-base font-bold text-neutral-900 leading-tight">
                 Reflection Synthesis
               </h2>
               <p className="text-xs text-neutral-500 truncate max-w-sm">
